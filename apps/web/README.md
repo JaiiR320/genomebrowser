@@ -21,7 +21,7 @@ Next.js rewrites `/api/*` and `/mcp` to the browser server at `http://127.0.0.1:
 
 ## Shared session
 
-The Sessions panel lists saved sessions alphabetically and marks the current session. Select a name to open its `/browser/[sessionId]` URL and restore its saved snapshot. Use the delete icon beside a session name to remove its saved snapshot. The `local` session cannot be deleted. Deleting the current session stops this tab's autosave and opens `/browser/local`. A failed deletion leaves the current session open and resumes saving. Another tab still viewing a deleted session can recreate it by saving. The list refreshes after a successful deletion, when the panel opens, or when the window regains focus. Open a new session URL, such as `/browser/niship`, to create it; it appears in the saved list after its first autosave.
+The Sessions panel lists saved sessions alphabetically and marks the current session. Select a name to open its `/browser/[sessionId]` URL and restore its saved snapshot. Use the delete icon beside a session name to remove its saved snapshot. The `local` session cannot be deleted. Deleting the current session stops this tab's autosave and opens `/browser/local`. A failed deletion leaves that session in the list. When the failed deletion is the current session, the tab stays there and resumes saving. Another tab still viewing a deleted session can recreate it by saving. The list refreshes when the panel opens, when the window regains focus, and when a deletion finishes. A list response that started before the deletion cannot put that session back. Open a new session URL, such as `/browser/niship`, to create it; it appears in the saved list after its first autosave.
 
 Sessions are saved in SQLite by the session ID in the URL. IDs are 1–64 letters, digits, `_`, or `-`. Set `GB_DATABASE_PATH` in the server process to choose the database file; the default is `./data/browser.sqlite`, relative to its working directory. The server creates the parent directory. Keep this file on persistent storage when hosting the server.
 
@@ -66,6 +66,38 @@ To add a product page:
 3. Keep the existing shared layout so navigation preserves browser stores and panel state. Route-local component state may reset when navigating away. Refreshing creates new stores and restores the saved session.
 
 There is no central page registry or page export step. See [Pages and panels](docs/02-guides/pages.md) for a route example.
+
+## Add a query or mutation
+
+`AppProviders` mounts `ServerQueryProvider` above the per-session stores. Pass `endpoint` to point reads and writes at another prefix. The local default is `/api`. The provider holds one TanStack Query client for the app. Panels read and change server JSON through it, so each panel does not pick its own cache or request lifetime.
+
+To add a read, call `useServerQuery` with a `queryKey`, a `path` relative to the endpoint, and a parser. The hook joins the path to the configured endpoint. A panel does not hardcode `/api`. The hook passes the query `AbortSignal` to `fetch`, so leaving the page cancels that read. Failed reads stay failed until the panel refetches them, on focus, when it opens again, or after a mutation invalidates the key.
+
+To add a mutation, call `useServerMutation` with the query keys to refresh and either a `path` and `method` or a `mutationFn`. The refresh runs after success and after failure. A read of those keys that is already in flight is cancelled, and its response cannot overwrite the refresh. An optional `optimistic` update changes the cached value immediately and restores it if the request fails.
+
+`mutationFn` receives a `request` function that builds the URL from the configured endpoint. That request has no abort signal. The mutation keeps running if the user navigates away or persistence calls `stop()`. Do not pass `stop()`'s signal, or any other navigation signal, into the request. Pausing and resuming autosave stays in `persistence.ts`. Deleting the session this tab has open goes through `useDeleteSession`, which flushes the current save, deletes, and resumes saving if deletion fails.
+
+```tsx
+import { sessionListSchema } from "@weng-lab/browser-server/protocol";
+import { useDeleteSession } from "../../../browser/BrowserServer";
+import { useServerMutation, useServerQuery } from "../../../browser/serverQuery";
+
+const deleteSession = useDeleteSession();
+const sessions = useServerQuery({
+  queryKey: ["sessions"],
+  path: "/sessions",
+  parse: (data) => sessionListSchema.parse(data),
+});
+const deletion = useServerMutation({
+  invalidate: [["sessions"]],
+  optimistic: {
+    queryKey: ["sessions"],
+    apply: (ids: string[] | undefined, id: string) =>
+      (ids ?? []).filter((savedId) => savedId !== id),
+  },
+  mutationFn: (id: string) => deleteSession(id),
+});
+```
 
 Each command is one file in `apps/server/src/commands/`, registered in its `index.ts`. That definition supplies both the MCP tool and the store action `browser/execute.ts` runs in the tab. Follow [Add a command](../server/README.md#add-a-command). Keep the protocol export browser-safe and live browser stores in the web app.
 

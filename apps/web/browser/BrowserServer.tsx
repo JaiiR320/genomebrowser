@@ -16,6 +16,7 @@ import { WorkspaceNavigationDisabledContext } from "../components/workspace/navi
 import { useBrowserSession } from "./BrowserSession";
 import { persistBrowserSession, type SessionSaveState } from "./persistence";
 import { connectRemoteControl, type RemoteControlState } from "./remoteControl";
+import { serverUrl } from "./serverUrl";
 
 const disabledSaveStore = createStore<{ status: SessionSaveState }>(() => ({ status: "disabled" }));
 const SessionSaveContext = createContext(disabledSaveStore);
@@ -53,7 +54,7 @@ export function BrowserServer({
   const [enabled, setEnabled] = useState(true);
   const [state, setState] = useState<RemoteControlState>("off");
   const remoteControl = useMemo(() => ({ state, enabled, setEnabled }), [state, enabled]);
-  const sessionUrl = endpoint && `${endpoint.replace(/\/$/, "")}/sessions/${sessionId}`;
+  const sessionUrl = endpoint ? serverUrl(endpoint, `/sessions/${sessionId}`) : undefined;
   const restoration = useMemo(() => ({ sessionUrl, session }), [sessionUrl, session]);
   const [restored, setRestored] = useState<typeof restoration | null>(null);
   const ready = restored === restoration;
@@ -95,9 +96,7 @@ export function BrowserServer({
           setDeletingActiveSession(false);
         }
       } else {
-        const response = await fetch(`${endpoint.replace(/\/$/, "")}/sessions/${id}`, {
-          method: "DELETE",
-        });
+        const response = await fetch(serverUrl(endpoint, `/sessions/${id}`), { method: "DELETE" });
         if (!response.ok) throw new Error("Session deletion failed");
       }
     },

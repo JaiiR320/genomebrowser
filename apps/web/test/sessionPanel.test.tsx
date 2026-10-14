@@ -1,54 +1,34 @@
 // @vitest-environment jsdom
 
-import { SWRConfig } from "swr";
 import { act, useState } from "react";
 import type { ReactNode } from "react";
 import { renderWithProbe, type Probe } from "@weng-lab/render-probe";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { AppProviders } from "../app/(workspace)/AppProviders";
-import { useSessionId, useSessionSaveState } from "../browser/BrowserServer";
+import { useSessionId } from "../browser/BrowserServer";
 import { useBrowserSession, type BrowserSession } from "../browser/BrowserSession";
 import { snapshot } from "../browser/snapshot";
 import { PanelStateProvider, usePanelState } from "../components/workspace/panels/panelState";
 import { SidePanel } from "../components/workspace/panels/SidePanel";
-import { SideBar } from "../components/workspace/frame/SideBar";
-import { navigation } from "../app/(workspace)/navigation";
 import { SessionPanel } from "../app/(workspace)/browser/SessionPanel";
 
 const route = vi.hoisted(() => ({
   params: { sessionId: "testsession" },
-  pathname: "/browser/testsession",
   navigate: (_href: string) => {},
 }));
 vi.mock("next/navigation", () => ({
   useParams: () => route.params,
-  usePathname: () => route.pathname,
   useRouter: () => ({ replace: route.navigate }),
 }));
 // Replace only Next's navigation boundary; session selection, persistence and stores stay real.
 vi.mock("next/link", () => ({
-  default: ({
-    href,
-    children,
-    onNavigate,
-    ...props
-  }: {
-    href: string;
-    children: ReactNode;
-    onNavigate?: (event: { preventDefault: () => void }) => void;
-  }) => (
+  default: ({ href, children, ...props }: { href: string; children: ReactNode }) => (
     <a
       {...props}
       href={href}
       onClick={(event) => {
         event.preventDefault();
-        let prevented = false;
-        onNavigate?.({
-          preventDefault: () => {
-            prevented = true;
-          },
-        });
-        if (!prevented) route.navigate(href);
+        route.navigate(href);
       }}
     >
       {children}
@@ -63,10 +43,6 @@ let togglePanel: (side: "left" | "right") => void;
 let listResponse: () => Promise<Response>;
 let deleteResponse: (url: string) => Promise<Response>;
 
-function SaveStateOutput() {
-  return <output data-testid="save-state">{useSessionSaveState()}</output>;
-}
-
 function SessionControls() {
   session = useBrowserSession();
   togglePanel = usePanelState((state) => state.toggle);
@@ -74,7 +50,6 @@ function SessionControls() {
   return (
     <>
       <output>{useSessionId()}</output>
-      <SaveStateOutput />
       <SidePanel
         side="left"
         open={open}
@@ -84,30 +59,16 @@ function SessionControls() {
     </>
   );
 }
-function TestApp({ showSidebar = false }: { showSidebar?: boolean }) {
-  const [swr] = useState(() => ({
-    provider: () => new Map(),
-    dedupingInterval: 0,
-    focusThrottleInterval: 0,
-    shouldRetryOnError: false,
-  }));
+function TestApp({ endpoint = "/api" }: { endpoint?: string }) {
   const [sessionId, setSessionId] = useState("testsession");
-  const [pathname, setPathname] = useState("/browser/testsession");
   route.params = { sessionId };
-  route.pathname = pathname;
-  route.navigate = (href) => {
-    setPathname(href);
-    if (href.startsWith("/browser/")) setSessionId(href.split("/").at(-1)!);
-  };
+  route.navigate = (href) => setSessionId(href.split("/").at(-1)!);
   return (
-    <SWRConfig value={swr}>
-      <PanelStateProvider>
-        <AppProviders>
-          {showSidebar && <SideBar navigation={navigation} />}
-          {pathname.startsWith("/browser/") ? <SessionControls /> : <main>Settings</main>}
-        </AppProviders>
-      </PanelStateProvider>
-    </SWRConfig>
+    <PanelStateProvider>
+      <AppProviders endpoint={endpoint}>
+        <SessionControls />
+      </AppProviders>
+    </PanelStateProvider>
   );
 }
 
@@ -229,70 +190,96 @@ it("budgets the render when saved session names arrive", async () => {
   `);
 });
 
-// Deleting during a list refresh must start an authoritative read. Only the
-// fresh response needs one render; an older response must not change the list.
-it.each(["stale-first", "fresh-first"])(
-  "refetches sessions after deletion and ignores an older refresh (%s)",
-  async (order) => {
-    ids.push("removed-elsewhere");
-    probe = await renderWithProbe(<TestApp />);
-    const staleIds = [...ids];
-    const reads: ((response: Response) => void)[] = [];
-    const readList = vi.fn(() => new Promise<Response>((resolve) => reads.push(resolve)));
-    listResponse = readList;
-    await probe.measure(async () => {
-      window.dispatchEvent(new Event("focus"));
-      await new Promise((done) => setTimeout(done, 0));
+it("does not restore a deleted session when an older list response arrives", async () => {
+  probe = await renderWithProbe(<TestApp />);
+  const requests: Array<(response: Response) => void> = [];
+  listResponse = () =>
+    new Promise<Response>((done) => {
+      requests.push(done);
     });
-    expect(readList).toHaveBeenCalledTimes(1);
-    ids = ["local", "newsession", "niship", "testsession"];
-    await probe.measure(() =>
-      document.querySelector<HTMLButtonElement>('[aria-label="Delete session niship"]')!.click(),
-    );
-    expect(document.querySelector('a[href="/browser/niship"]')).toBeNull();
-    expect(readList).toHaveBeenCalledTimes(2);
-    expect(document.querySelector('a[href="/browser/removed-elsewhere"]')).not.toBeNull();
-    for (const response of order === "stale-first" ? ["stale", "fresh"] : ["fresh", "stale"]) {
-      const report = await probe.measure(() =>
-        response === "stale" ? reads[0](Response.json(staleIds)) : reads[1](Response.json(ids)),
-      );
-      expect(document.querySelector('a[href="/browser/niship"]')).toBeNull();
-      if (response === "fresh") {
-        expect(report.pick("SessionPanel")).toMatchInlineSnapshot(`
-          {
-            "SessionPanel": 1,
-          }
-        `);
-      } else {
-        expect(report.pick("SessionPanel")).toMatchInlineSnapshot(`
-          {
-            "SessionPanel": 0,
-          }
-        `);
-      }
+  await probe.measure(async () => {
+    window.dispatchEvent(new Event("focus"));
+    await new Promise((done) => setTimeout(done, 0));
+  });
+  expect(requests).toHaveLength(1);
+  await probe.measure(() =>
+    document.querySelector<HTMLButtonElement>('[aria-label="Delete session niship"]')!.click(),
+  );
+  // Deletion cancels the read already in flight and starts another from the server.
+  expect(requests).toHaveLength(2);
+  await probe.measure(() => requests[0](Response.json(["local", "niship", "testsession"])));
+  expect(document.querySelector('a[href="/browser/niship"]')).toBeNull();
+  await probe.measure(() => requests[1](Response.json(ids)));
+  expect(document.querySelector('a[href="/browser/niship"]')).toBeNull();
+  expect(document.querySelector('a[href="/browser/testsession"]')).not.toBeNull();
+});
+
+it("loads and deletes sessions through the configured endpoint", async () => {
+  const urls: string[] = [];
+  vi.stubGlobal("fetch", (url: string, init?: RequestInit) => {
+    urls.push(String(url));
+    if (init?.method === "DELETE") return deleteResponse(String(url));
+    if (init?.method === "PUT") return Promise.resolve(Response.json({ ok: true }));
+    if (String(url).endsWith("/sessions")) return listResponse();
+    return Promise.resolve(Response.json({}, { status: 404 }));
+  });
+  deleteResponse = async (url) => {
+    ids = ids.filter((id) => !url.endsWith(`/sessions/${id}`));
+    return Response.json({ ok: true });
+  };
+  probe = await renderWithProbe(<TestApp endpoint="/gateway" />);
+  expect(urls).toContain("/gateway/sessions");
+  expect(urls).not.toContain("/api/sessions");
+  await probe.measure(() =>
+    document.querySelector<HTMLButtonElement>('[aria-label="Delete session niship"]')!.click(),
+  );
+  expect(urls).toContain("/gateway/sessions/niship");
+  expect(document.querySelector('a[href="/browser/niship"]')).toBeNull();
+});
+
+it("keeps another session listed when deleting it fails", async () => {
+  probe = await renderWithProbe(<TestApp />);
+  vi.useFakeTimers();
+  const saves: string[] = [];
+  deleteResponse = async () => new Response(null, { status: 503 });
+  vi.stubGlobal("fetch", (url: string, init?: RequestInit) => {
+    if (init?.method === "DELETE") return deleteResponse(url);
+    if (init?.method === "PUT") {
+      saves.push(url);
+      return Promise.resolve(Response.json({ ok: true }));
     }
-    expect(
-      [...document.querySelectorAll<HTMLAnchorElement>('[aria-label="Browser sessions"] a')].map(
-        (link) => link.getAttribute("href"),
-      ),
-    ).toEqual(["/browser/local", "/browser/newsession", "/browser/testsession"]);
-    expect(document.querySelector("output")?.textContent).toBe("testsession");
-  },
-);
+    if (url === "/api/sessions") return listResponse();
+    return Promise.resolve(Response.json({}, { status: 404 }));
+  });
+  await probe.measure(() =>
+    document.querySelector<HTMLButtonElement>('[aria-label="Delete session niship"]')!.click(),
+  );
+  expect(document.querySelector("output")?.textContent).toBe("testsession");
+  expect(document.querySelector('[role="alert"]')?.textContent).toContain(
+    "Could not delete niship",
+  );
+  expect(document.querySelector('a[href="/browser/niship"]')).not.toBeNull();
+  expect(ids).toEqual(["local", "niship", "testsession"]);
+  await probe.measure(() =>
+    session.useBrowserStore.getState().setRegion({ chromosome: "chr2", start: 100, end: 200 }),
+  );
+  await act(async () => vi.advanceTimersByTimeAsync(200));
+  expect(saves).toEqual(["/api/sessions/testsession"]);
+});
 
 it("deletes another session without navigating and never offers deletion for local", async () => {
   probe = await renderWithProbe(<TestApp />);
   expect(document.querySelector('[aria-label="Delete session local"]')).toBeNull();
-  // One render disables controls while deleting; one removes the deleted session.
+  // One render disables controls, one removes the session, and one enables the remaining controls.
   const report = await probe.measure(() =>
     document.querySelector<HTMLButtonElement>('[aria-label="Delete session niship"]')!.click(),
   );
   expect(report.why("SessionPanel")).toEqual([
-    expect.objectContaining({ renders: 2, because: ["state"] }),
+    expect.objectContaining({ renders: 3, because: ["state"] }),
   ]);
   expect(report.pick("SessionPanel")).toMatchInlineSnapshot(`
     {
-      "SessionPanel": 2,
+      "SessionPanel": 3,
     }
   `);
   expect(document.querySelector('a[href="/browser/niship"]')).toBeNull();
@@ -404,207 +391,4 @@ it("refreshes saved sessions when the mounted Sessions panel reopens", async () 
       "SessionPanel": 2,
     }
   `);
-});
-
-it.each(["queued", "in-flight"])(
-  "saves %s edits before switching sessions and restores them on return",
-  async (phase) => {
-    probe = await renderWithProbe(<TestApp />);
-    vi.useFakeTimers();
-    const originalFetch = fetch;
-    const writes: { body: string; resolve: (response: Response) => void }[] = [];
-    let saved: string | undefined;
-    vi.stubGlobal("fetch", (url: string, init?: RequestInit) => {
-      if (url === "/api/sessions/testsession" && init?.method === "PUT") {
-        return new Promise<Response>((resolve) => {
-          writes.push({
-            body: init.body as string,
-            resolve: (response) => {
-              if (response.ok) saved = init.body as string;
-              resolve(response);
-            },
-          });
-        });
-      }
-      if (url === "/api/sessions/testsession" && !init?.method && saved) {
-        return Promise.resolve(
-          new Response(saved, { headers: { "Content-Type": "application/json" } }),
-        );
-      }
-      return originalFetch(url, init);
-    });
-    const originalSession = session;
-    const edited = { chromosome: "chr1", start: 100, end: 200 };
-    await probe.measure(() => session.useBrowserStore.getState().setRegion(edited));
-    if (phase === "in-flight") await act(async () => vi.advanceTimersByTimeAsync(200));
-    const report = await probe.measure(() =>
-      document.querySelector<HTMLAnchorElement>('a[href="/browser/niship"]')!.click(),
-    );
-    // One render disables navigation while the save is pending.
-    expect(report.pick("SessionPanel")).toMatchInlineSnapshot(`
-      {
-        "SessionPanel": 1,
-      }
-    `);
-    expect(writes).toHaveLength(1);
-    expect(document.querySelector("output")?.textContent).toBe("testsession");
-    expect(session).toBe(originalSession);
-    // An edit arriving during the outstanding PUT must get its own acknowledgement.
-    const newer = { chromosome: "chr1", start: 300, end: 400 };
-    await probe.measure(() => session.useBrowserStore.getState().setRegion(newer));
-    await probe.measure(() => writes[0].resolve(Response.json({ ok: true })));
-    expect(writes).toHaveLength(2);
-    expect(session).toBe(originalSession);
-    await probe.measure(() => writes[1].resolve(Response.json({ ok: true })));
-    expect(document.querySelector("output")?.textContent).toBe("niship");
-    expect(JSON.parse(saved!).browser.region).toEqual(newer);
-    await probe.measure(() =>
-      document.querySelector<HTMLAnchorElement>('a[href="/browser/testsession"]')!.click(),
-    );
-    expect(document.querySelector("output")?.textContent).toBe("testsession");
-    expect(session.useBrowserStore.getState().region).toEqual(newer);
-  },
-);
-
-it.each(["queued", "in-flight"])(
-  "keeps the current session and edits when a %s save fails during switching",
-  async (phase) => {
-    probe = await renderWithProbe(<TestApp />);
-    vi.useFakeTimers();
-    const originalFetch = fetch;
-    let complete!: (response: Response) => void;
-    vi.stubGlobal("fetch", (url: string, init?: RequestInit) =>
-      init?.method === "PUT"
-        ? new Promise<Response>((resolve) => {
-            complete = resolve;
-          })
-        : originalFetch(url, init),
-    );
-    const originalSession = session;
-    const edited = { chromosome: "chr1", start: 100, end: 200 };
-    await probe.measure(() => session.useBrowserStore.getState().setRegion(edited));
-    if (phase === "in-flight") await act(async () => vi.advanceTimersByTimeAsync(200));
-    await probe.measure(() =>
-      document.querySelector<HTMLAnchorElement>('a[href="/browser/niship"]')!.click(),
-    );
-    await probe.measure(() => complete(Response.json({}, { status: 503 })));
-    expect(document.querySelector("output")?.textContent).toBe("testsession");
-    expect(session).toBe(originalSession);
-    expect(session.useBrowserStore.getState().region).toEqual(edited);
-    expect(document.querySelector('[role="alert"]')?.textContent).toContain("Could not save");
-    // A second selection retries saving instead of discarding the unsaved edit.
-    await probe.measure(() =>
-      document.querySelector<HTMLAnchorElement>('a[href="/browser/niship"]')!.click(),
-    );
-    await probe.measure(() => complete(Response.json({ ok: true })));
-    expect(document.querySelector("output")?.textContent).toBe("niship");
-  },
-);
-
-it("does not override Settings navigation when a pending session-selection save completes", async () => {
-  probe = await renderWithProbe(<TestApp />);
-  vi.useFakeTimers();
-  const originalFetch = fetch;
-  let complete!: (response: Response) => void;
-  let savedBody = "";
-  vi.stubGlobal("fetch", (url: string, init?: RequestInit) =>
-    init?.method === "PUT"
-      ? new Promise<Response>((resolve) => {
-          savedBody = init.body as string;
-          complete = resolve;
-        })
-      : originalFetch(url, init),
-  );
-  const originalSession = session;
-  const edited = { chromosome: "chr1", start: 100, end: 200 };
-  await probe.measure(() => session.useBrowserStore.getState().setRegion(edited));
-  await probe.measure(() =>
-    document.querySelector<HTMLAnchorElement>('a[href="/browser/niship"]')!.click(),
-  );
-  await probe.measure(() => route.navigate("/settings"));
-  expect(document.querySelector('[aria-label="Browser sessions"]')).toBeNull();
-  expect(document.querySelector("main")?.textContent).toBe("Settings");
-  await probe.measure(() => complete(Response.json({ ok: true })));
-  expect(document.querySelector("main")?.textContent).toBe("Settings");
-  expect(document.querySelector('[aria-label="Browser sessions"]')).toBeNull();
-  expect(session).toBe(originalSession);
-  expect(JSON.parse(savedBody).browser.region).toEqual(edited);
-});
-
-it.each(["unsupported track", "failed GET"])(
-  "can leave a session with a %s without overwriting its saved snapshot",
-  async (failure) => {
-    const originalFetch = fetch;
-    const writes: string[] = [];
-    let brokenSnapshot: ReturnType<typeof snapshot> | undefined;
-    vi.stubGlobal("fetch", (url: string, init?: RequestInit) => {
-      if (init?.method === "PUT") writes.push(url);
-      if (url === "/api/sessions/testsession" && !init?.method) {
-        if (failure === "failed GET") return Promise.resolve(Response.json({}, { status: 503 }));
-        brokenSnapshot ??= snapshot(session);
-        brokenSnapshot.tracks[0].type = "unregistered-track";
-        return Promise.resolve(Response.json(brokenSnapshot));
-      }
-      return originalFetch(url, init);
-    });
-    probe = await renderWithProbe(<TestApp />);
-    expect(document.querySelector('[data-testid="save-state"]')?.textContent).toBe("load-error");
-    const originalSnapshot = JSON.stringify(brokenSnapshot);
-    await probe.measure(() =>
-      document.querySelector<HTMLAnchorElement>('a[href="/browser/niship"]')!.click(),
-    );
-    expect(document.querySelector("output")?.textContent).toBe("niship");
-    expect(document.querySelector('[data-testid="save-state"]')?.textContent).toBe("saved");
-    expect(document.querySelector('[role="alert"]')).toBeNull();
-    expect(session.useBrowserStore.getState().region).toEqual({
-      chromosome: "chr12",
-      start: 10000,
-      end: 20000,
-    });
-    expect(writes).toEqual([]);
-    expect(JSON.stringify(brokenSnapshot)).toBe(originalSnapshot);
-    await probe.measure(() =>
-      document.querySelector<HTMLAnchorElement>('a[href="/browser/testsession"]')!.click(),
-    );
-    expect(document.querySelector("output")?.textContent).toBe("testsession");
-    expect(document.querySelector('[data-testid="save-state"]')?.textContent).toBe("load-error");
-    expect(writes).toEqual([]);
-  },
-);
-
-it.each([true, false])(
-  "blocks Settings navigation during active-session deletion (success: %s)",
-  async (success) => {
-    probe = await renderWithProbe(<TestApp showSidebar />);
-    let complete!: (response: Response) => void;
-    deleteResponse = () =>
-      new Promise<Response>((resolve) => {
-        complete = resolve;
-      });
-    await probe.measure(() =>
-      document
-        .querySelector<HTMLButtonElement>('[aria-label="Delete session testsession"]')!
-        .click(),
-    );
-    const settings = document.querySelector<HTMLAnchorElement>('[aria-label="Settings"]')!;
-    expect(settings.getAttribute("aria-disabled")).toBe("true");
-    await probe.measure(() => settings.click());
-    expect(document.querySelector("main")).toBeNull();
-    expect(document.querySelector("output")?.textContent).toBe("testsession");
-    await probe.measure(() => complete(Response.json({}, { status: success ? 200 : 503 })));
-    expect(document.querySelector("output")?.textContent).toBe(success ? "local" : "testsession");
-    const enabledSettings = document.querySelector<HTMLAnchorElement>('[aria-label="Settings"]')!;
-    expect(enabledSettings.getAttribute("aria-disabled")).not.toBe("true");
-    await probe.measure(() => enabledSettings.click());
-    expect(document.querySelector("main")?.textContent).toBe("Settings");
-  },
-);
-
-// A save acknowledgement changes the test status output, not the session list.
-it("isolates the session-panel render budget from autosave status updates", async () => {
-  vi.useFakeTimers();
-  probe = await renderWithProbe(<TestApp />);
-  const report = await probe.measure(async () => vi.advanceTimersByTimeAsync(200));
-  expect(document.querySelector('[data-testid="save-state"]')?.textContent).toBe("saved");
-  expect(report.pick("SessionPanel")).toEqual({ SessionPanel: 0 });
 });

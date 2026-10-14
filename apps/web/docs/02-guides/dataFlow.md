@@ -4,18 +4,19 @@ The browser tab owns live browser state. Next.js serves the website and rewrites
 
 ## Ownership
 
-| Owner                                    | Responsibility                                                      | Lifetime                                           |
-| ---------------------------------------- | ------------------------------------------------------------------- | -------------------------------------------------- |
-| `AppProviders`                           | Creates the browser session and `BrowserServer` above routes        | Shared layout mount                                |
-| `browser/BrowserSession.tsx`             | Browser store and track store                                       | Survive route changes; restored after refresh      |
-| `browser/persistence.ts`                 | Load once, then autosave                                            | Shared layout mount                                |
-| `browser/remoteControl.ts`, `execute.ts` | Command stream, store actions, and replies                          | While remote control is on                         |
-| `components/workspace/`                  | Navigation, theme, panel widths and collapsed state                 | Panel state survives navigation, resets on refresh |
-| `next.config.ts` rewrites                | Forward `/api/*` and `/mcp` to the server                           | Each HTTP request                                  |
-| Server `http/`                           | Local host/origin checks, input validation, routes                  | Each request                                       |
-| Server `commands/`, `mcp.ts`             | Command definitions, and one MCP tool per registered command        | Each MCP request                                   |
-| Server `tabs.ts`, `pendingCommands.ts`   | Open tabs by session ID, pending replies, timeouts and cancellation | Each tab connection, in memory                     |
-| Server `storage/`                        | Async session repository and SQLite adapter                         | Durable snapshots by session ID                    |
+| Owner                                    | Responsibility                                                                 | Lifetime                                           |
+| ---------------------------------------- | ------------------------------------------------------------------------------ | -------------------------------------------------- |
+| `AppProviders`                           | Creates the query client, browser session, and `BrowserServer` above routes    | Shared layout mount                                |
+| `browser/serverQuery.tsx`                | Server JSON reads and mutations for the configured endpoint                    | App lifetime, outside the per-session stores       |
+| `browser/BrowserSession.tsx`             | Browser store and track store                                                  | Survive route changes; restored after refresh      |
+| `browser/persistence.ts`                 | Load once, then autosave. Pause and resume around deletion of the open session | While that session is open                         |
+| `browser/remoteControl.ts`, `execute.ts` | Command stream, store actions, and replies                                     | While remote control is on                         |
+| `components/workspace/`                  | Navigation, theme, panel widths and collapsed state                            | Panel state survives navigation, resets on refresh |
+| `next.config.ts` rewrites                | Forward `/api/*` and `/mcp` to the server                                      | Each HTTP request                                  |
+| Server `http/`                           | Local host/origin checks, input validation, routes                             | Each request                                       |
+| Server `commands/`, `mcp.ts`             | Command definitions, and one MCP tool per registered command                   | Each MCP request                                   |
+| Server `tabs.ts`, `pendingCommands.ts`   | Open tabs by session ID, pending replies, timeouts and cancellation            | Each tab connection, in memory                     |
+| Server `storage/`                        | Async session repository and SQLite adapter                                    | Durable snapshots by session ID                    |
 
 The browser uses `@weng-lab/genomebrowser` for stores and rendering, `@weng-lab/genomebrowser-ui` for browser controls, and `@weng-lab/genomebrowser-tracks` for track implementations. Track fetchers use `@weng-lab/genomic-reader` to read remote genomic files. MUI supplies application controls. The browser and server share schemas through `@weng-lab/browser-server/protocol`; browser code never imports the Node.js server implementation.
 
@@ -87,6 +88,8 @@ sequenceDiagram
 ```
 
 A refresh creates new stores and restores the last successful save. Every tab with the session open saves to it; the last save wins, and live edits are not broadcast between tabs. See [Shared session](../../README.md#shared-session) for snapshot contents and retries.
+
+The Sessions panel reads saved IDs with `useServerQuery` (`GET /sessions` on the configured endpoint, `/api/sessions` locally). The query key is `["sessions"]`. Closing the panel leaves it mounted. Opening it again refetches, and so does focusing the window. `useServerMutation` deletes a session and then invalidates `["sessions"]`. A list read that started earlier is cancelled, so its response cannot return a deleted session to the panel. Deleting the open session still goes through `persistence.ts`: autosave pauses, the current save finishes, and saving resumes if deletion fails. That delete is not aborted when the user navigates away. See [Add a query or mutation](../../README.md#add-a-query-or-mutation).
 
 SQLite is supplied in the server entry point through `SessionRepository`. Another database can replace it without changing routes.
 

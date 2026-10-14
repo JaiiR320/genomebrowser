@@ -6,6 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { Workspace } from "../components/workspace/Workspace";
 import { BrowserSessionProvider } from "../browser/BrowserSession";
 import { BrowserServer } from "../browser/BrowserServer";
+import { ServerQueryProvider } from "../browser/serverQuery";
 import { BrowserPage } from "../app/(workspace)/browser/BrowserPage";
 import SettingsPage from "../app/(workspace)/settings/page";
 
@@ -17,13 +18,15 @@ vi.mock("next/navigation", () => ({
 function TestShell({ settings = false }: { settings?: boolean }) {
   return (
     <StrictMode>
-      <BrowserSessionProvider>
-        <BrowserServer endpoint="/api" sessionId="local">
-          <Workspace navigation={[]}>
-            {settings ? <SettingsPage /> : <BrowserPage sessionId="local" />}
-          </Workspace>
-        </BrowserServer>
-      </BrowserSessionProvider>
+      <ServerQueryProvider endpoint="/api">
+        <BrowserSessionProvider>
+          <BrowserServer endpoint="/api" sessionId="local">
+            <Workspace navigation={[]}>
+              {settings ? <SettingsPage /> : <BrowserPage sessionId="local" />}
+            </Workspace>
+          </BrowserServer>
+        </BrowserSessionProvider>
+      </ServerQueryProvider>
     </StrictMode>
   );
 }

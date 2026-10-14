@@ -541,3 +541,48 @@ it("navigates and changes interaction mode through the browser controls", async 
   expect(body(1).browser.selectionMode).toBe("highlight");
   expect(document.querySelector('[aria-label^="Edit region"]')).not.toBeNull();
 });
+
+it("finishes deleting the active session after navigation stops persistence", async () => {
+  await act(async () => loaded(savedSnapshot()));
+  const saveRequest = deferred();
+  const removal = deferred();
+  const deletes: RequestInit[] = [];
+  vi.stubGlobal("fetch", (url: string, init?: RequestInit) => {
+    if (init?.method === "DELETE") {
+      deletes.push(init);
+      return removal.promise;
+    }
+    if (init?.method === "PUT") return saveRequest.promise;
+    if (init?.method === "POST") return post(url, init);
+    return loads(url, init);
+  });
+  load = deferred();
+  await act(async () => probe.rerender(<Shell sessionId="pending" />));
+  await act(async () => loaded(savedSnapshot()));
+
+  await act(async () =>
+    session.useBrowserStore.getState().setRegion({ chromosome: "chr1", start: 1, end: 100 }),
+  );
+  await advance(200);
+  let settled!: Promise<unknown>;
+  await act(async () => {
+    settled = deleteSession("pending").then(
+      () => "deleted",
+      (error: unknown) => error,
+    );
+  });
+  expect(deletes).toHaveLength(0);
+
+  load = deferred();
+  await act(async () => probe.rerender(<Shell sessionId="other" />));
+  await act(async () => {
+    saveRequest.resolve(Response.json({ ok: true }));
+  });
+  expect(deletes).toHaveLength(1);
+  expect(deletes[0]?.signal).toBeUndefined();
+  await act(async () => {
+    removal.resolve(Response.json({ ok: true }));
+    await settled;
+  });
+  expect(await settled).toBe("deleted");
+});

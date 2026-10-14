@@ -8,6 +8,7 @@ import { Workspace } from "../components/workspace/Workspace";
 import { BrowserSessionProvider } from "../browser/BrowserSession";
 import { BrowserPage } from "../app/(workspace)/browser/BrowserPage";
 import { BrowserServer } from "../browser/BrowserServer";
+import { ServerQueryProvider } from "../browser/serverQuery";
 import CollectionsPage from "../app/(workspace)/collections/page";
 import SettingsPage from "../app/(workspace)/settings/page";
 import { navigation } from "../app/(workspace)/navigation";
@@ -43,19 +44,21 @@ function TestShell() {
   route.pathname = pathname;
   route.navigate = setPathname;
   return (
-    <BrowserSessionProvider>
-      <BrowserServer sessionId="local">
-        <Workspace navigation={navigation}>
-          {pathname === "/browser" ? (
-            <BrowserPage sessionId="local" />
-          ) : pathname === "/collections" ? (
-            <CollectionsPage />
-          ) : (
-            <SettingsPage />
-          )}
-        </Workspace>
-      </BrowserServer>
-    </BrowserSessionProvider>
+    <ServerQueryProvider endpoint="/api">
+      <BrowserSessionProvider>
+        <BrowserServer sessionId="local">
+          <Workspace navigation={navigation}>
+            {pathname === "/browser" ? (
+              <BrowserPage sessionId="local" />
+            ) : pathname === "/collections" ? (
+              <CollectionsPage />
+            ) : (
+              <SettingsPage />
+            )}
+          </Workspace>
+        </BrowserServer>
+      </BrowserSessionProvider>
+    </ServerQueryProvider>
   );
 }
 

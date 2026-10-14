@@ -52,6 +52,10 @@ The versioned JSON representation of browser settings, region, highlights, selec
 
 The server's injected `SessionRepository`, with asynchronous `load(id)` and `save(id, snapshot)` operations. SQLite is the current implementation.
 
+### Server query
+
+A TanStack Query read or mutation against the browser server. `ServerQueryProvider` in `AppProviders` owns the client and the configured endpoint for the whole app, outside the per-session browser stores. A read can be cancelled when its subscriber goes away. A mutation runs to completion when the user navigates away, then refreshes the query keys it lists. Pausing autosave around deletion of the open session stays in persistence, not in the query client.
+
 ### Save status
 
 The client indicator at the top left of the browser center panel. It reports restoration, saving, successful persistence, or failure and retry. A command reply and save completion are separate events.

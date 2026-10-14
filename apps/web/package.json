@@ -20,7 +20,9 @@
     "@mui/icons-material": "catalog:",
     "@mui/material": "catalog:",
     "@mui/material-nextjs": "catalog:",
+    "@tanstack/query-core": "^5.104.2",
     "@tanstack/react-hotkeys": "^0.13.0",
+    "@tanstack/react-query": "^5.104.2",
     "@weng-lab/browser-server": "workspace:*",
     "@weng-lab/genomebrowser": "workspace:*",
     "@weng-lab/genomebrowser-tracks": "workspace:*",
@@ -28,7 +30,6 @@
     "next": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:",
-    "swr": "^2.5.1",
     "zustand": "catalog:"
   },
   "devDependencies": {

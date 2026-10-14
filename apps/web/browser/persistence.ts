@@ -135,8 +135,9 @@ export function persistBrowserSession(
     try {
       // Let a save already accepted by the server finish before deleting its snapshot.
       await pendingWrite;
-      if (stopped) throw new Error("Session closed before deletion");
-      const response = await fetch(sessionUrl, { method: "DELETE", signal: abort.signal });
+      // stop() aborts this controller's reads and saves when the user navigates away.
+      // Deletion still finishes: it does not use that signal, even if stop() already ran.
+      const response = await fetch(sessionUrl, { method: "DELETE" });
       if (!response.ok) throw new Error("Session deletion failed");
       stop();
     } catch (error) {

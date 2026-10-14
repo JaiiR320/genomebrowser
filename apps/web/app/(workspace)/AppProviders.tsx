@@ -5,6 +5,7 @@ import dynamic from "next/dynamic";
 import { useParams } from "next/navigation";
 import { sessionIdSchema } from "@weng-lab/browser-server/protocol";
 import { BrowserServer } from "../../browser/BrowserServer";
+import { ServerQueryProvider } from "../../browser/serverQuery";
 import { WorkspaceSkeleton } from "../../components/workspace/WorkspaceSkeleton";
 
 // Browser stores initialize browser-only rendering resources. The provider stays mounted
@@ -17,15 +18,24 @@ const BrowserSessionProvider = dynamic(
 /** Opened when no session has been viewed yet. */
 const defaultSessionId = "local";
 
-export function AppProviders({ children }: { children: ReactNode }) {
+export function AppProviders({
+  endpoint = "/api",
+  children,
+}: {
+  /** Browser-server prefix. Session reads and writes join their paths to it. */
+  endpoint?: string;
+  children: ReactNode;
+}) {
   const sessionId = useCurrentSessionId();
-  // A different session gets fresh stores instead of inheriting the previous session's state.
+  // The query cache outlives a session switch. A new id remounts only the stores below.
   return (
-    <BrowserSessionProvider key={sessionId}>
-      <BrowserServer endpoint="/api" sessionId={sessionId}>
-        {children}
-      </BrowserServer>
-    </BrowserSessionProvider>
+    <ServerQueryProvider endpoint={endpoint}>
+      <BrowserSessionProvider key={sessionId}>
+        <BrowserServer endpoint={endpoint} sessionId={sessionId}>
+          {children}
+        </BrowserServer>
+      </BrowserSessionProvider>
+    </ServerQueryProvider>
   );
 }
 

@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import useSWR from "swr";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import Box from "@mui/material/Box";
@@ -14,12 +13,9 @@ import Typography from "@mui/material/Typography";
 import { usePanelState } from "../../../components/workspace/panels/panelState";
 import { sessionListSchema } from "@weng-lab/browser-server/protocol";
 import { useDeleteSession, useFlushSession, useSessionId } from "../../../browser/BrowserServer";
+import { useServerMutation, useServerQuery } from "../../../browser/serverQuery";
 
-async function fetchSessions(url: string) {
-  const response = await fetch(url, { cache: "no-store" });
-  if (!response.ok) throw new Error("Session list failed");
-  return sessionListSchema.parse(await response.json());
-}
+const sessionListKey = ["sessions"] as const;
 
 export function SessionPanel() {
   const sessionId = useSessionId();
@@ -37,27 +33,36 @@ export function SessionPanel() {
     [],
   );
   const [switchError, setSwitchError] = useState<string | null>(null);
-  const [deleting, setDeleting] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const {
     data: savedIds = [],
     error,
     isLoading,
-    mutate,
-  } = useSWR("/api/sessions", fetchSessions, {
-    revalidateOnMount: true,
+    refetch,
+  } = useServerQuery({
+    queryKey: sessionListKey,
+    path: "/sessions",
+    parse: (data) => sessionListSchema.parse(data),
+  });
+  const deletion = useServerMutation<string, string[]>({
+    invalidate: [sessionListKey],
+    optimistic: {
+      queryKey: sessionListKey,
+      apply: (ids, id) => (ids ?? []).filter((savedId) => savedId !== id),
+    },
+    mutationFn: (id) => deleteSession(id),
   });
 
   const open = usePanelState((state) => state.leftOpen);
   const wasOpen = useRef(open);
   useEffect(() => {
-    // Closed workspace panels remain mounted, so mount revalidation cannot refresh reopening.
-    if (open && !wasOpen.current) void mutate();
+    // Closed workspace panels remain mounted, so mount refetch cannot refresh reopening.
+    if (open && !wasOpen.current) void refetch();
     wasOpen.current = open;
-  }, [open, mutate]);
+  }, [open, refetch]);
 
   async function openSession(id: string) {
-    if (id === sessionId || deleting || switchPending.current) return;
+    if (id === sessionId || deletion.isPending || switchPending.current) return;
     const generation = selectionGeneration.current;
     switchPending.current = true;
     setSwitching(true);
@@ -79,18 +84,13 @@ export function SessionPanel() {
   }
 
   async function handleDelete(id: string) {
-    if (id === "local" || deleting || switchPending.current) return;
-    setDeleting(id);
+    if (id === "local" || deletion.isPending || switchPending.current) return;
     setDeleteError(null);
     try {
-      await deleteSession(id);
-      // Invalidate older list reads, remove the deleted name, and fetch the current list.
-      void mutate((ids) => (ids ?? []).filter((savedId) => savedId !== id), { revalidate: true });
+      await deletion.mutateAsync(id);
       if (id === sessionId) router.replace("/browser/local");
     } catch {
       setDeleteError(`Could not delete ${id}. Try again.`);
-    } finally {
-      setDeleting(null);
     }
   }
 
@@ -114,7 +114,7 @@ export function SessionPanel() {
                 void openSession(id);
               }}
               selected={id === sessionId}
-              disabled={deleting !== null || switching}
+              disabled={deletion.isPending || switching}
               aria-current={id === sessionId ? "page" : undefined}
               sx={{ borderRadius: 1, flex: 1, minWidth: 0 }}
             >
@@ -128,7 +128,7 @@ export function SessionPanel() {
                 aria-label={`Delete session ${id}`}
                 title={`Delete session ${id}`}
                 size="small"
-                disabled={deleting !== null || switching}
+                disabled={deletion.isPending || switching}
                 onClick={() => void handleDelete(id)}
               >
                 <DeleteOutline fontSize="small" />
