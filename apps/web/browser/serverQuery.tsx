@@ -88,6 +88,39 @@ type ServerMutationOptions<TVariables, TOptimistic> = {
     }
 );
 
+function isIdList(data: unknown): data is string[] {
+  return Array.isArray(data) && data.every((item) => typeof item === "string");
+}
+
+function restoreOptimistic<TOptimistic>(
+  client: QueryClient,
+  queryKey: QueryKey,
+  variables: unknown,
+  snapshots: Array<[QueryKey, TOptimistic | undefined]>,
+) {
+  const current = client.getQueriesData({ queryKey });
+  if (
+    typeof variables === "string" &&
+    snapshots.some(([, data]) => data !== undefined) &&
+    current.every(([, data]) => isIdList(data))
+  ) {
+    const id = variables;
+    client.setQueriesData<string[]>({ queryKey }, (ids) =>
+      !ids || ids.includes(id) ? ids : [...ids, id].sort(),
+    );
+    return;
+  }
+  if (snapshots.every(([, data]) => data === undefined)) {
+    // setQueryData ignores undefined and would keep the optimistic value.
+    client.removeQueries({ queryKey });
+    return;
+  }
+  for (const [key, data] of snapshots) {
+    if (data === undefined) client.removeQueries({ queryKey: key, exact: true });
+    else client.setQueryData(key, data);
+  }
+}
+
 async function runServerMutation<TVariables, TOptimistic>(
   client: QueryClient,
   endpoint: string,
@@ -99,12 +132,12 @@ async function runServerMutation<TVariables, TOptimistic>(
     : options.invalidate;
   await Promise.all(readKeys.map((queryKey) => client.cancelQueries({ queryKey })));
 
-  const previous = options.optimistic
-    ? client.getQueryData<TOptimistic>(options.optimistic.queryKey)
-    : undefined;
+  const snapshots = options.optimistic
+    ? client.getQueriesData<TOptimistic>({ queryKey: options.optimistic.queryKey })
+    : [];
   if (options.optimistic) {
     const { queryKey, apply } = options.optimistic;
-    client.setQueryData<TOptimistic>(queryKey, (current) => apply(current, variables));
+    client.setQueriesData<TOptimistic>({ queryKey }, (current) => apply(current, variables));
   }
 
   const request: ServerRequest = (path, init) => writeServer(endpoint, path, init);
@@ -113,11 +146,8 @@ async function runServerMutation<TVariables, TOptimistic>(
     const path = typeof options.path === "function" ? options.path(variables) : options.path;
     return await request(path, { method: options.method, body: options.body?.(variables) });
   } catch (error) {
-    if (options.optimistic) {
-      // setQueryData ignores undefined and would keep the optimistic value.
-      if (previous === undefined) client.removeQueries({ queryKey: options.optimistic.queryKey });
-      else client.setQueryData(options.optimistic.queryKey, previous);
-    }
+    if (options.optimistic)
+      restoreOptimistic(client, options.optimistic.queryKey, variables, snapshots);
     throw error;
   } finally {
     // Start the refresh, but do not wait for it. The mutation has already settled.
@@ -136,7 +166,7 @@ export function useServerQuery<T>({
 }) {
   const endpoint = useServerEndpoint();
   const query = useQuery({
-    queryKey,
+    queryKey: [...queryKey, path],
     queryFn: async ({ signal }) => {
       const response = await fetch(serverUrl(endpoint, path), { cache: "no-store", signal });
       if (signal.aborted) throw new DOMException("The operation was aborted.", "AbortError");

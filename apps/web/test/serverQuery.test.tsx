@@ -160,6 +160,65 @@ it("finishes a delete after the panel unmounts", async () => {
   expect(await outcome).toBe("deleted");
 });
 
+it("puts a failed delete back without restoring an id removed by a newer delete", async () => {
+  const deletes = new Map<string, (response: Response) => void>();
+  let lists = 0;
+  vi.stubGlobal("fetch", (url: string, init?: RequestInit) => {
+    if (init?.method === "DELETE") {
+      return new Promise<Response>((resolve) => {
+        deletes.set(url, resolve);
+      });
+    }
+    lists += 1;
+    if (lists === 1) return Promise.resolve(Response.json(["local", "niship", "other"]));
+    return new Promise<Response>(() => {});
+  });
+  function Row() {
+    const sessions = useServerQuery({
+      queryKey: ["sessions"],
+      path: "/sessions",
+      parse: (data) => data as string[],
+    });
+    const deletion = useServerMutation<string, string[]>({
+      invalidate: [["sessions"]],
+      optimistic: {
+        queryKey: ["sessions"],
+        apply: (ids, id) => (ids ?? []).filter((savedId) => savedId !== id),
+      },
+      mutationFn: (id, request) => request(`/sessions/${id}`, { method: "DELETE" }),
+    });
+    return (
+      <>
+        <output>{(sessions.data ?? []).join(",")}</output>
+        <button type="button" onClick={() => void deletion.mutateAsync("niship").catch(() => {})}>
+          Delete niship
+        </button>
+        <button type="button" onClick={() => void deletion.mutateAsync("other").catch(() => {})}>
+          Delete other
+        </button>
+      </>
+    );
+  }
+  probe = await renderWithProbe(
+    <ServerQueryProvider endpoint="/gateway">
+      <Row />
+    </ServerQueryProvider>,
+  );
+  await vi.waitFor(() => {
+    expect(document.querySelector("output")?.textContent).toBe("local,niship,other");
+  });
+  document.querySelectorAll("button")[0]!.click();
+  document.querySelectorAll("button")[1]!.click();
+  await vi.waitFor(() => {
+    expect(document.querySelector("output")?.textContent).toBe("local");
+  });
+  deletes.get("/gateway/sessions/other")!(Response.json({ ok: true }));
+  deletes.get("/gateway/sessions/niship")!(new Response(null, { status: 503 }));
+  await vi.waitFor(() => {
+    expect(document.querySelector("output")?.textContent).toBe("local,niship");
+  });
+});
+
 it("restores the previous list when a delete fails", async () => {
   vi.stubGlobal("fetch", (_url: string, init?: RequestInit) =>
     init?.method === "DELETE"

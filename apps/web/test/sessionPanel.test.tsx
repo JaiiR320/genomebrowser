@@ -245,6 +245,7 @@ it("loads and deletes sessions through the configured endpoint", async () => {
   probe = await renderWithProbe(<TestApp endpoint="/gateway" />);
   await vi.waitFor(() => {
     expect(urls).toContain("/gateway/sessions");
+    expect(document.querySelector('[aria-label="Delete session niship"]')).not.toBeNull();
   });
   expect(urls).not.toContain("/api/sessions");
   await probe.measure(() =>
