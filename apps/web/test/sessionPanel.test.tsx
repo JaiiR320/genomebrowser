@@ -166,7 +166,7 @@ it("includes the current unsaved session and refreshes saved names when the tab 
   });
 });
 
-it("keeps the current session usable when the saved list fails and recovers on focus", async () => {
+it("keeps the current session usable when the saved list fails and recovers when the tab becomes visible", async () => {
   listResponse = async () => Response.json({ error: "Unavailable" }, { status: 503 });
   probe = await renderWithProbe(<TestApp />);
   await vi.waitFor(() => {

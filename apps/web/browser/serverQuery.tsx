@@ -141,7 +141,6 @@ async function runServerMutation<TVariables, TOptimistic>(
     if (options.optimistic) restoreOptimistic(client, options.optimistic, variables, snapshots);
     throw error;
   } finally {
-    // Start the refresh, but do not wait for it. The mutation has already settled.
     void Promise.all(options.invalidate.map((queryKey) => client.invalidateQueries({ queryKey })));
   }
 }
