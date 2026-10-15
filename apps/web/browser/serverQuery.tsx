@@ -13,10 +13,6 @@ import { serverUrl } from "./serverUrl";
 
 const EndpointContext = createContext<string | null>(null);
 
-/**
- * One query cache for browser-server JSON, scoped to `endpoint`.
- * Mount this above the per-session stores so the cache survives session switches.
- */
 export function ServerQueryProvider({
   endpoint,
   children,
@@ -29,8 +25,6 @@ export function ServerQueryProvider({
       new QueryClient({
         defaultOptions: {
           queries: {
-            // Panels recover on focus, reopen, or invalidation. A hidden retry would
-            // race those refreshes and delay the error the panel shows.
             retry: false,
             refetchOnWindowFocus: true,
           },
@@ -56,11 +50,9 @@ export type ServerRequestInit = {
   body?: unknown;
 };
 
-/** A write against the configured endpoint. It has no abort signal. */
 export type ServerRequest = (path: string, init: ServerRequestInit) => Promise<unknown>;
 
 async function writeServer(endpoint: string, path: string, init: ServerRequestInit) {
-  // Mutations outlive the page. Callers cannot attach the query signal or persistence stop().
   const response = await fetch(serverUrl(endpoint, path), {
     method: init.method,
     headers: init.body === undefined ? undefined : { "Content-Type": "application/json" },
@@ -79,7 +71,6 @@ type Optimistic<TVariables, TOptimistic> = {
 };
 
 type ServerMutationOptions<TVariables, TOptimistic> = {
-  /** Query keys to refresh after the mutation succeeds or fails. Prefixes match. */
   invalidate: QueryKey[];
   optimistic?: Optimistic<TVariables, TOptimistic>;
 } & (
@@ -97,11 +88,6 @@ type ServerMutationOptions<TVariables, TOptimistic> = {
     }
 );
 
-/**
- * Run a mutation, then refresh its queries.
- * An in-flight read of those queries is cancelled first so its response cannot overwrite the outcome.
- * The request itself is not cancelled when the caller unmounts.
- */
 async function runServerMutation<TVariables, TOptimistic>(
   client: QueryClient,
   endpoint: string,
@@ -139,7 +125,6 @@ async function runServerMutation<TVariables, TOptimistic>(
   }
 }
 
-/** Read JSON from the configured endpoint. The query signal cancels the fetch when the read is dropped. */
 export function useServerQuery<T>({
   queryKey,
   path,
@@ -167,14 +152,12 @@ export function useServerQuery<T>({
   };
 }
 
-/** Change server data. Reads refresh after it settles. The write is not tied to navigation or `stop()`. */
 export function useServerMutation<TVariables, TOptimistic = unknown>(
   options: ServerMutationOptions<TVariables, TOptimistic>,
 ) {
   const endpoint = useServerEndpoint();
   const client = useQueryClient();
   const mutation = useMutation({
-    // TanStack passes an AbortSignal that can follow the observer. This layer does not.
     mutationFn: (variables: TVariables) => runServerMutation(client, endpoint, options, variables),
   });
   return { isPending: mutation.isPending, mutateAsync: mutation.mutateAsync };

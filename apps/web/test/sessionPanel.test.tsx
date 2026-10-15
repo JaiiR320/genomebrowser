@@ -217,7 +217,6 @@ it("does not restore a deleted session when an older list response arrives", asy
   await probe.measure(() =>
     document.querySelector<HTMLButtonElement>('[aria-label="Delete session niship"]')!.click(),
   );
-  // Deletion cancels the read already in flight and starts another from the server.
   expect(requests).toHaveLength(2);
   await probe.measure(() => requests[0](Response.json(["local", "niship", "testsession"])));
   await vi.waitFor(() => {
@@ -298,8 +297,7 @@ it("deletes another session without navigating and never offers deletion for loc
     expect(document.querySelector('[aria-label="Delete session niship"]')).not.toBeNull();
   });
   expect(document.querySelector('[aria-label="Delete session local"]')).toBeNull();
-  // One render disables the controls. The cache update and the settled mutation then
-  // notify together, so removing the session and enabling the remaining controls is one render.
+  // Disabling the controls is one render. Removing the row and enabling the rest commit together.
   const report = await probe.measure(async () => {
     document.querySelector<HTMLButtonElement>('[aria-label="Delete session niship"]')!.click();
     await vi.waitFor(() => {

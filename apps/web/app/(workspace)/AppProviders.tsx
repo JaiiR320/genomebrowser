@@ -22,12 +22,10 @@ export function AppProviders({
   endpoint = "/api",
   children,
 }: {
-  /** Browser-server prefix. Session reads and writes join their paths to it. */
   endpoint?: string;
   children: ReactNode;
 }) {
   const sessionId = useCurrentSessionId();
-  // The query cache outlives a session switch. A new id remounts only the stores below.
   return (
     <ServerQueryProvider endpoint={endpoint}>
       <BrowserSessionProvider key={sessionId}>
