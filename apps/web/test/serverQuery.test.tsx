@@ -99,13 +99,19 @@ it("drops an in-flight list read when a delete settles and applies the later ref
   expect(requests.map((request) => request.url)).toEqual(["/gateway/sessions"]);
   await probe.measure(() => document.querySelector("button")!.click());
   expect(deletes).toEqual([{ url: "/gateway/sessions/niship", signal: undefined }]);
-  expect(requests).toHaveLength(2);
+  await vi.waitFor(() => {
+    expect(requests).toHaveLength(2);
+  });
   expect(requests[0].signal?.aborted).toBe(true);
   expect(requests[1].signal?.aborted).toBe(false);
   await probe.measure(() => requests[0].resolve(Response.json(["local", "niship"])));
-  expect(document.querySelector("output")?.textContent).toBe("");
+  await vi.waitFor(() => {
+    expect(document.querySelector("output")?.textContent).toBe("");
+  });
   await probe.measure(() => requests[1].resolve(Response.json(["local"])));
-  expect(document.querySelector("output")?.textContent).toBe("local");
+  await vi.waitFor(() => {
+    expect(document.querySelector("output")?.textContent).toBe("local");
+  });
   expect(await outcome).toBe("deleted");
 });
 
@@ -135,7 +141,9 @@ it("finishes a delete after the panel unmounts", async () => {
     );
   }
   probe = await renderWithProbe(<Toggle />);
-  expect(document.querySelector("output")?.textContent).toBe("local,niship");
+  await vi.waitFor(() => {
+    expect(document.querySelector("output")?.textContent).toBe("local,niship");
+  });
   await probe.measure(() => document.querySelectorAll("button")[0]!.click());
   expect(deleteUrls).toEqual(["/gateway/sessions/niship"]);
   expect(deletes).toHaveLength(1);
@@ -159,8 +167,12 @@ it("restores the previous list when a delete fails", async () => {
       : Promise.resolve(Response.json(["local", "niship"])),
   );
   probe = await renderWithProbe(<Host />);
-  expect(document.querySelector("output")?.textContent).toBe("local,niship");
+  await vi.waitFor(() => {
+    expect(document.querySelector("output")?.textContent).toBe("local,niship");
+  });
   await probe.measure(() => document.querySelector("button")!.click());
   expect(await outcome).toBe("failed");
-  expect(document.querySelector("output")?.textContent).toBe("local,niship");
+  await vi.waitFor(() => {
+    expect(document.querySelector("output")?.textContent).toBe("local,niship");
+  });
 });

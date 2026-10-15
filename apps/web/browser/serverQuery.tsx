@@ -9,27 +9,7 @@ import {
   useQueryClient,
   type QueryKey,
 } from "@tanstack/react-query";
-import { focusManager, notifyManager } from "@tanstack/query-core";
 import { serverUrl } from "./serverUrl";
-
-// Deliver cache updates with the request's promise. The default timer would leave panels one
-// task behind the response they just received.
-notifyManager.setScheduler((callback) => {
-  queueMicrotask(callback);
-});
-
-// The app refreshes visible queries when the window regains focus, not only when the tab becomes visible.
-if (typeof window !== "undefined") {
-  focusManager.setEventListener((handleFocus) => {
-    const onFocus = () => handleFocus();
-    window.addEventListener("visibilitychange", onFocus, false);
-    window.addEventListener("focus", onFocus, false);
-    return () => {
-      window.removeEventListener("visibilitychange", onFocus);
-      window.removeEventListener("focus", onFocus);
-    };
-  });
-}
 
 const EndpointContext = createContext<string | null>(null);
 
