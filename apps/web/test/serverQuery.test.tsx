@@ -184,6 +184,7 @@ it("puts a failed delete back without restoring an id removed by a newer delete"
       optimistic: {
         queryKey: ["sessions"],
         apply: (ids, id) => (ids ?? []).filter((savedId) => savedId !== id),
+        rollback: (ids, id) => (ids && !ids.includes(id) ? [...ids, id].sort() : ids),
       },
       mutationFn: (id, request) => request(`/sessions/${id}`, { method: "DELETE" }),
     });
@@ -214,6 +215,49 @@ it("puts a failed delete back without restoring an id removed by a newer delete"
   });
   deletes.get("/gateway/sessions/other")!(Response.json({ ok: true }));
   deletes.get("/gateway/sessions/niship")!(new Response(null, { status: 503 }));
+  await vi.waitFor(() => {
+    expect(document.querySelector("output")?.textContent).toBe("local,niship");
+  });
+});
+
+it("restores the snapshot when a failed mutation has no rollback", async () => {
+  vi.stubGlobal("fetch", (_url: string, init?: RequestInit) =>
+    init?.method === "DELETE"
+      ? Promise.resolve(new Response(null, { status: 503 }))
+      : Promise.resolve(Response.json(["local", "niship"])),
+  );
+  function Replace() {
+    const sessions = useServerQuery({
+      queryKey: ["sessions"],
+      path: "/sessions",
+      parse: (data) => data as string[],
+    });
+    const deletion = useServerMutation<string, string[]>({
+      invalidate: [["sessions"]],
+      optimistic: {
+        queryKey: ["sessions"],
+        apply: () => ["replaced"],
+      },
+      mutationFn: (id, request) => request(`/sessions/${id}`, { method: "DELETE" }),
+    });
+    return (
+      <>
+        <output>{(sessions.data ?? []).join(",")}</output>
+        <button type="button" onClick={() => void deletion.mutateAsync("niship").catch(() => {})}>
+          Replace
+        </button>
+      </>
+    );
+  }
+  probe = await renderWithProbe(
+    <ServerQueryProvider endpoint="/gateway">
+      <Replace />
+    </ServerQueryProvider>,
+  );
+  await vi.waitFor(() => {
+    expect(document.querySelector("output")?.textContent).toBe("local,niship");
+  });
+  document.querySelector("button")!.click();
   await vi.waitFor(() => {
     expect(document.querySelector("output")?.textContent).toBe("local,niship");
   });

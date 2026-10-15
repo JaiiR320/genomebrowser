@@ -73,7 +73,7 @@ There is no central page registry or page export step. See [Pages and panels](do
 
 To add a read, call `useServerQuery` with a `queryKey`, a `path` relative to the endpoint, and a parser. The hook joins the path to the configured endpoint and stores the read at `[...queryKey, path]`. A panel does not hardcode `/api`. The hook passes the query `AbortSignal` to `fetch`, so leaving the page cancels that read. Failed reads stay failed until the panel refetches them, when the tab becomes visible, when it opens again, or after a mutation invalidates the key.
 
-To add a mutation, call `useServerMutation` with the query keys to refresh and either a `path` and `method` or a `mutationFn`. The refresh runs after success and after failure. A read of those keys that is already in flight is cancelled, and its response cannot overwrite the refresh. An optional `optimistic` update changes the cached value immediately. If the request fails, a deleted id is put back into the current list so a newer delete is left in place. Other optimistic values are restored from the snapshot taken before that request.
+To add a mutation, call `useServerMutation` with the query keys to refresh and either a `path` and `method` or a `mutationFn`. The refresh runs after success and after failure. A read of those keys that is already in flight is cancelled, and its response cannot overwrite the refresh. An optional `optimistic` update changes the cached value immediately. If the request fails and `rollback` is set, that function writes the cache. Otherwise the snapshot from before the request is restored.
 
 `mutationFn` receives a `request` function that builds the URL from the configured endpoint. That request has no abort signal. The mutation keeps running if the user navigates away or persistence calls `stop()`. Do not pass `stop()`'s signal, or any other navigation signal, into the request. Pausing and resuming autosave stays in `persistence.ts`. Deleting the session this tab has open goes through `useDeleteSession`, which flushes the current save, deletes, and resumes saving if deletion fails.
 
@@ -94,6 +94,8 @@ const deletion = useServerMutation({
     queryKey: ["sessions"],
     apply: (ids: string[] | undefined, id: string) =>
       (ids ?? []).filter((savedId) => savedId !== id),
+    rollback: (ids: string[] | undefined, id: string) =>
+      ids && !ids.includes(id) ? [...ids, id].sort() : ids,
   },
   mutationFn: (id: string) => deleteSession(id),
 });

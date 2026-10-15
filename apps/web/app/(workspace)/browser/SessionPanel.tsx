@@ -49,6 +49,7 @@ export function SessionPanel() {
     optimistic: {
       queryKey: sessionListKey,
       apply: (ids, id) => (ids ?? []).filter((savedId) => savedId !== id),
+      rollback: (ids, id) => (ids && !ids.includes(id) ? [...ids, id].sort() : ids),
     },
     mutationFn: (id) => deleteSession(id),
   });

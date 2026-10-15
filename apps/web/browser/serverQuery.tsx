@@ -68,6 +68,7 @@ async function writeServer(endpoint: string, path: string, init: ServerRequestIn
 type Optimistic<TVariables, TOptimistic> = {
   queryKey: QueryKey;
   apply: (current: TOptimistic | undefined, variables: TVariables) => TOptimistic;
+  rollback?: (current: TOptimistic | undefined, variables: TVariables) => TOptimistic | undefined;
 };
 
 type ServerMutationOptions<TVariables, TOptimistic> = {
@@ -88,31 +89,22 @@ type ServerMutationOptions<TVariables, TOptimistic> = {
     }
 );
 
-function isIdList(data: unknown): data is string[] {
-  return Array.isArray(data) && data.every((item) => typeof item === "string");
-}
-
-function restoreOptimistic<TOptimistic>(
+function restoreOptimistic<TVariables, TOptimistic>(
   client: QueryClient,
-  queryKey: QueryKey,
-  variables: unknown,
+  optimistic: Optimistic<TVariables, TOptimistic>,
+  variables: TVariables,
   snapshots: Array<[QueryKey, TOptimistic | undefined]>,
 ) {
-  const current = client.getQueriesData({ queryKey });
-  if (
-    typeof variables === "string" &&
-    snapshots.some(([, data]) => data !== undefined) &&
-    current.every(([, data]) => isIdList(data))
-  ) {
-    const id = variables;
-    client.setQueriesData<string[]>({ queryKey }, (ids) =>
-      !ids || ids.includes(id) ? ids : [...ids, id].sort(),
+  if (optimistic.rollback) {
+    const rollback = optimistic.rollback;
+    client.setQueriesData<TOptimistic>({ queryKey: optimistic.queryKey }, (current) =>
+      rollback(current, variables),
     );
     return;
   }
   if (snapshots.every(([, data]) => data === undefined)) {
     // setQueryData ignores undefined and would keep the optimistic value.
-    client.removeQueries({ queryKey });
+    client.removeQueries({ queryKey: optimistic.queryKey });
     return;
   }
   for (const [key, data] of snapshots) {
@@ -146,8 +138,7 @@ async function runServerMutation<TVariables, TOptimistic>(
     const path = typeof options.path === "function" ? options.path(variables) : options.path;
     return await request(path, { method: options.method, body: options.body?.(variables) });
   } catch (error) {
-    if (options.optimistic)
-      restoreOptimistic(client, options.optimistic.queryKey, variables, snapshots);
+    if (options.optimistic) restoreOptimistic(client, options.optimistic, variables, snapshots);
     throw error;
   } finally {
     // Start the refresh, but do not wait for it. The mutation has already settled.
