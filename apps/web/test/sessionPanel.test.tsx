@@ -241,31 +241,66 @@ it("budgets the render when saved session names arrive", async () => {
   `);
 });
 
-it("does not restore a deleted session when an older list response arrives", async () => {
-  probe = await renderWithProbe(<TestApp />);
-  const requests: Array<(response: Response) => void> = [];
-  listResponse = () =>
-    new Promise<Response>((done) => {
-      requests.push(done);
+// Deleting during a list refresh must start an authoritative read. Only the
+// fresh response needs one render; an older response must not change the list.
+it.each(["stale-first", "fresh-first"])(
+  "refetches sessions after deletion and ignores an older refresh (%s)",
+  async (order) => {
+    ids.push("removed-elsewhere");
+    probe = await renderWithProbe(<TestApp />);
+    await vi.waitFor(() => {
+      expect(document.querySelector('a[href="/browser/removed-elsewhere"]')).not.toBeNull();
     });
-  window.dispatchEvent(new Event("visibilitychange"));
-  await vi.waitFor(() => {
-    expect(requests).toHaveLength(1);
-  });
-  await probe.measure(() =>
-    document.querySelector<HTMLButtonElement>('[aria-label="Delete session niship"]')!.click(),
-  );
-  expect(requests).toHaveLength(2);
-  await probe.measure(() => requests[0](Response.json(["local", "niship", "testsession"])));
-  await vi.waitFor(() => {
-    expect(document.querySelector('a[href="/browser/niship"]')).toBeNull();
-  });
-  await probe.measure(() => requests[1](Response.json(ids)));
-  await vi.waitFor(() => {
-    expect(document.querySelector('a[href="/browser/niship"]')).toBeNull();
-  });
-  expect(document.querySelector('a[href="/browser/testsession"]')).not.toBeNull();
-});
+    const staleIds = [...ids];
+    const reads: ((response: Response) => void)[] = [];
+    const readList = vi.fn(() => new Promise<Response>((resolve) => reads.push(resolve)));
+    listResponse = readList;
+    window.dispatchEvent(new Event("visibilitychange"));
+    await vi.waitFor(() => {
+      expect(readList).toHaveBeenCalledTimes(1);
+    });
+    ids = ["local", "newsession", "niship", "testsession"];
+    await probe.measure(() =>
+      document.querySelector<HTMLButtonElement>('[aria-label="Delete session niship"]')!.click(),
+    );
+    await vi.waitFor(() => {
+      expect(document.querySelector('a[href="/browser/niship"]')).toBeNull();
+      expect(
+        document.querySelector<HTMLButtonElement>('[aria-label="Delete session testsession"]')
+          ?.disabled,
+      ).toBe(false);
+    });
+    expect(readList).toHaveBeenCalledTimes(2);
+    expect(document.querySelector('a[href="/browser/removed-elsewhere"]')).not.toBeNull();
+    for (const response of order === "stale-first" ? ["stale", "fresh"] : ["fresh", "stale"]) {
+      const report = await probe.measure(async () => {
+        if (response === "stale") reads[0](Response.json(staleIds));
+        else reads[1](Response.json(ids));
+        await new Promise((done) => setTimeout(done, 0));
+      });
+      expect(document.querySelector('a[href="/browser/niship"]')).toBeNull();
+      if (response === "fresh") {
+        expect(report.pick("SessionPanel")).toMatchInlineSnapshot(`
+          {
+            "SessionPanel": 1,
+          }
+        `);
+      } else {
+        expect(report.pick("SessionPanel")).toMatchInlineSnapshot(`
+          {
+            "SessionPanel": 0,
+          }
+        `);
+      }
+    }
+    expect(
+      [...document.querySelectorAll<HTMLAnchorElement>('[aria-label="Browser sessions"] a')].map(
+        (link) => link.getAttribute("href"),
+      ),
+    ).toEqual(["/browser/local", "/browser/newsession", "/browser/testsession"]);
+    expect(document.querySelector("output")?.textContent).toBe("testsession");
+  },
+);
 
 it("loads and deletes sessions through the configured endpoint", async () => {
   const urls: string[] = [];
