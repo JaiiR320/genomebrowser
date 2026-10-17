@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { act, useState } from "react";
 import type { ReactNode } from "react";
 import { renderWithProbe, type Probe } from "@weng-lab/render-probe";
@@ -57,6 +58,7 @@ vi.mock("next/link", () => ({
 
 let probe: Probe | undefined;
 let session: BrowserSession;
+let queryClient: QueryClient;
 let ids: string[];
 let togglePanel: (side: "left" | "right") => void;
 let listResponse: () => Promise<Response>;
@@ -68,6 +70,7 @@ function SaveStateOutput() {
 
 function SessionControls() {
   session = useBrowserSession();
+  queryClient = useQueryClient();
   togglePanel = usePanelState((state) => state.toggle);
   const open = usePanelState((state) => state.leftOpen);
   return (
@@ -253,7 +256,12 @@ it.each(["stale-first", "fresh-first"])(
     });
     const staleIds = [...ids];
     const reads: ((response: Response) => void)[] = [];
-    const readList = vi.fn(() => new Promise<Response>((resolve) => reads.push(resolve)));
+    const readList = vi.fn<() => Promise<Response>>(
+      () =>
+        new Promise<Response>((resolve) => {
+          reads.push(resolve);
+        }),
+    );
     listResponse = readList;
     window.dispatchEvent(new Event("visibilitychange"));
     await vi.waitFor(() => {
@@ -272,26 +280,54 @@ it.each(["stale-first", "fresh-first"])(
     });
     expect(readList).toHaveBeenCalledTimes(2);
     expect(document.querySelector('a[href="/browser/removed-elsewhere"]')).not.toBeNull();
+    const sessionsQuery = () => {
+      const query = queryClient.getQueryCache().find({ queryKey: ["sessions", "/sessions"] });
+      if (!query) throw new Error("sessions query missing");
+      return query;
+    };
+    const sessionHrefs = () =>
+      [...document.querySelectorAll<HTMLAnchorElement>('[aria-label="Browser sessions"] a')].map(
+        (link) => link.getAttribute("href"),
+      );
+    const optimisticHrefs = [
+      "/browser/local",
+      "/browser/removed-elsewhere",
+      "/browser/testsession",
+    ];
+    const freshHrefs = ["/browser/local", "/browser/newsession", "/browser/testsession"];
+    const staleFetchStatus = order === "fresh-first" ? "idle" : "fetching";
+    const staleHrefs = order === "fresh-first" ? freshHrefs : optimisticHrefs;
+    async function drainNotifications() {
+      // Query updates commit on setTimeout(0). Drain those timers before the
+      // measurement ends so the commit cannot fall into the next response.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    async function settleFresh() {
+      reads[1](Response.json(ids));
+      await vi.waitFor(() => {
+        expect(sessionsQuery().state.fetchStatus).toBe("idle");
+        expect(sessionHrefs()).toEqual(freshHrefs);
+      });
+      await drainNotifications();
+    }
+    async function settleStale() {
+      reads[0](Response.json(staleIds));
+      await drainNotifications();
+      await vi.waitFor(() => {
+        expect(sessionsQuery().state.fetchStatus).toBe(staleFetchStatus);
+        expect(sessionHrefs()).toEqual(staleHrefs);
+      });
+    }
     for (const response of order === "stale-first" ? ["stale", "fresh"] : ["fresh", "stale"]) {
       const report = await probe.measure(async () => {
-        if (response === "stale") reads[0](Response.json(staleIds));
-        else reads[1](Response.json(ids));
-        await new Promise((done) => setTimeout(done, 0));
+        if (response === "fresh") await settleFresh();
+        else await settleStale();
       });
       expect(document.querySelector('a[href="/browser/niship"]')).toBeNull();
-      if (response === "fresh") {
-        expect(report.pick("SessionPanel")).toMatchInlineSnapshot(`
-          {
-            "SessionPanel": 1,
-          }
-        `);
-      } else {
-        expect(report.pick("SessionPanel")).toMatchInlineSnapshot(`
-          {
-            "SessionPanel": 0,
-          }
-        `);
-      }
+      expect(report.pick("SessionPanel")).toEqual({
+        SessionPanel: response === "fresh" ? 1 : 0,
+      });
     }
     expect(
       [...document.querySelectorAll<HTMLAnchorElement>('[aria-label="Browser sessions"] a')].map(
@@ -488,7 +524,7 @@ it("keeps the active session and resumes autosave after deletion fails", async (
 
 // Reopening through the workspace store refreshes external additions and removals without remounting.
 it("refreshes saved sessions when the mounted Sessions panel reopens", async () => {
-  const readList = vi.fn(async () => Response.json(ids));
+  const readList = vi.fn<() => Promise<Response>>(async () => Response.json(ids));
   listResponse = readList;
   probe = await renderWithProbe(<TestApp />);
   await vi.waitFor(() => {

@@ -355,7 +355,9 @@ it("keeps retrying restoration without autosaving after deletion fails on an uns
   const saved = savedSnapshot();
   saved.tracks[0].type = "unregistered-track";
   expect(sessionSnapshotSchema.safeParse(saved).success).toBe(true);
-  const remove = vi.fn(async () => Response.json({ error: "Unavailable" }, { status: 503 }));
+  const remove = vi.fn<() => Promise<Response>>(async () =>
+    Response.json({ error: "Unavailable" }, { status: 503 }),
+  );
   loads.mockImplementation(async () => Response.json(saved));
   vi.stubGlobal("fetch", (url: string, init?: RequestInit) =>
     init?.method === "DELETE"
@@ -396,7 +398,7 @@ it("keeps one pending load after failed deletion so a delayed response cannot di
   const first = deferred();
   const second = deferred();
   loads.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
-  const remove = vi.fn(async () => Response.json({}, { status: 503 }));
+  const remove = vi.fn<() => Promise<Response>>(async () => Response.json({}, { status: 503 }));
   vi.stubGlobal("fetch", (url: string, init?: RequestInit) =>
     init?.method === "DELETE"
       ? remove()

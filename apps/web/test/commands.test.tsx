@@ -12,7 +12,7 @@ import SettingsPage from "../app/(workspace)/settings/page";
 
 vi.mock("next/navigation", () => ({
   usePathname: () => "/browser",
-  useRouter: () => ({ replace: vi.fn() }),
+  useRouter: () => ({ replace: vi.fn<() => void>() }),
 }));
 
 function TestShell({ settings = false }: { settings?: boolean }) {
